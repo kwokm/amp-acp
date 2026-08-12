@@ -262,6 +262,25 @@ export class AmpAcpAgent implements Agent {
       }
     }
 
+    setImmediate(async () => {
+      try {
+        await this.client.sessionUpdate({
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: 'available_commands_update',
+            availableCommands: [
+              {
+                name: 'init',
+                description: 'Generate an AGENTS.md file for the project',
+              },
+            ],
+          },
+        });
+      } catch (e) {
+        console.error('[acp] failed to send available_commands_update', e);
+      }
+    });
+
     return {
       configOptions: buildSessionConfigOptions(session),
     };
