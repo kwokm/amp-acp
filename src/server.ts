@@ -21,6 +21,8 @@ import {
   type WriteTextFileResponse,
   type ClientCapabilities,
   type SessionConfigOption,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
 } from '@agentclientprotocol/sdk';
 import {
   createAmpTransport,
@@ -29,6 +31,7 @@ import {
 } from './amp-transport.js';
 import { convertAcpMcpServersToAmpConfig, type AmpMcpConfig } from './mcp-config.js';
 import { toAcpNotifications } from './to-acp.js';
+import { rememberSession, recallSession } from './session-store.js';
 import path from 'node:path';
 import packageJson from '../package.json';
 
@@ -151,6 +154,7 @@ export class AmpAcpAgent implements Agent {
         version: PACKAGE_VERSION,
       },
       agentCapabilities: {
+        loadSession: true,
         promptCapabilities: { image: true, embeddedContext: true },
         mcpCapabilities: { http: true, sse: true },
       },
@@ -213,6 +217,43 @@ export class AmpAcpAgent implements Agent {
     });
 
     return result;
+  }
+
+  async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    let session = this.sessions.get(params.sessionId);
+
+    if (!session) {
+      const persisted = recallSession(params.sessionId);
+      if (!persisted) {
+        throw RequestError.invalidParams(`Unknown session: ${params.sessionId}`);
+      }
+      session = {
+        threadId: persisted.threadId,
+        controller: null,
+        cancelled: false,
+        active: false,
+        mode: isPermissionMode(persisted.mode) ? persisted.mode : 'default',
+        model: isAmpModelId(persisted.model) ? persisted.model : 'medium',
+        mcpConfig: convertAcpMcpServersToAmpConfig(params.mcpServers),
+        cwd: params.cwd || persisted.cwd || process.cwd(),
+      };
+      this.sessions.set(params.sessionId, session);
+      console.error(`[acp] loaded session ${params.sessionId} -> thread ${persisted.threadId}`);
+    }
+
+    return {
+      configOptions: buildSessionConfigOptions(session),
+    };
+  }
+
+  private persistSession(sessionId: string, s: SessionState): void {
+    if (!s.threadId) return;
+    rememberSession(sessionId, {
+      threadId: s.threadId,
+      mode: s.mode,
+      model: s.model,
+      cwd: s.cwd,
+    });
   }
 
   async authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse> {
@@ -289,6 +330,7 @@ If there are Cursor rules (in .cursor/rules/ or .cursorrules), Claude rules (CLA
         if (!s.threadId && message.session_id) {
           s.threadId = message.session_id;
           console.error(`[amp] thread ${s.threadId}`);
+          this.persistSession(params.sessionId, s);
         }
 
         if (message.type === 'assistant' || message.type === 'user') {
@@ -363,6 +405,8 @@ If there are Cursor rules (in .cursor/rules/ or .cursorrules), Claude rules (CLA
       default:
         throw new Error(`Unsupported config option: ${params.configId}`);
     }
+
+    this.persistSession(params.sessionId, s);
 
     const configOptions = buildSessionConfigOptions(s);
     try {

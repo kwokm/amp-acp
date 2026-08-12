@@ -91,10 +91,17 @@ Run `amp login` before starting amp-acp. The adapter and CLI share the same Amp 
 - **Session configuration** — Configure permissions (*Default* or *Bypass*) and the current Amp mode (`low`, `medium`, `high`, or `ultra`) via ACP config options
 - **`/init` command** — Type `/init` to generate an `AGENTS.md` file for your project
 - **Conversation continuity** — Thread context is preserved across multiple prompts within a session
+- **Session resume** — `session/load` reattaches to the underlying Amp thread after amp-acp restarts, so ACP clients can reopen earlier sessions
 
 ### Continuing the latest thread on session start
 
 When the environment variable `AMP_ACP_CONTINUE_LATEST=1` is set, the first prompt in a fresh ACP session will continue the most recent Amp thread on this installation (equivalent to `amp threads continue`) instead of starting a new one. Useful when the ACP session follows on from prior `amp` CLI activity (for example, a one-shot `amp -x` invocation) and you want the chat to inherit that context. Off by default.
+
+### Resuming sessions
+
+amp-acp advertises the ACP `loadSession` capability. Once a prompt has started an Amp thread, the ACP session ID is mapped to that thread in a small state file (`~/.local/state/amp-acp/sessions.json`; respects `XDG_STATE_HOME`, uses `%LOCALAPPDATA%\amp-acp` on Windows, and can be overridden with `AMP_ACP_STATE_DIR`). When a client calls `session/load`, amp-acp restores the session's permission mode and Amp mode and continues the same thread (equivalent to `amp threads continue <id>`), even across amp-acp process restarts.
+
+Amp keeps the conversation context server-side, so the resumed thread has full history. amp-acp does not currently replay prior messages as `session/update` notifications during `session/load`; clients that render history from their own storage (or start from the next prompt) work as expected.
 
 ### Amp execution transport
 
