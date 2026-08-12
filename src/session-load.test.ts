@@ -31,8 +31,10 @@ const mockClient = {
   extNotification: async () => {},
 } as unknown as AgentSideConnection;
 
+const noHistory = async () => [];
+
 function createAgent(): InstanceType<typeof AmpAcpAgent> {
-  return new AmpAcpAgent(mockClient, createAmpTransport('sdk'));
+  return new AmpAcpAgent(mockClient, createAmpTransport('sdk'), noHistory);
 }
 
 describe('AmpAcpAgent session/load', () => {
@@ -133,6 +135,64 @@ describe('AmpAcpAgent session/load', () => {
     const lastCall = capturedCalls.at(-1)!;
     expect(lastCall.options.mode).toBe('high');
     expect(lastCall.options.dangerouslyAllowAll).toBe(true);
+  });
+
+  it('replays thread history as session/update notifications on load', async () => {
+    const first = createAgent();
+    await first.initialize({ protocolVersion: 1, clientCapabilities: {} });
+    const session = await first.newSession({ cwd: '/tmp', mcpServers: [] });
+    await first.prompt({
+      sessionId: session.sessionId,
+      prompt: [{ type: 'text', text: 'hello' }],
+    });
+
+    const updates: unknown[] = [];
+    const capturingClient = {
+      ...mockClient,
+      sessionUpdate: async (notification: unknown) => {
+        updates.push(notification);
+      },
+    } as unknown as AgentSideConnection;
+
+    const exportedThreads: string[] = [];
+    const fakeExport = async (threadId: string) => {
+      exportedThreads.push(threadId);
+      return [
+        { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 'pondering' }, { type: 'text', text: 'hi there' }] },
+        { role: 'info', content: [{ type: 'summary', summary: 'skip me' }] },
+      ];
+    };
+
+    const second = new AmpAcpAgent(capturingClient, createAmpTransport('sdk'), fakeExport);
+    await second.initialize({ protocolVersion: 1, clientCapabilities: {} });
+    await second.loadSession({ sessionId: session.sessionId, cwd: '/tmp', mcpServers: [] });
+
+    expect(exportedThreads).toEqual(['T-test-thread-id']);
+    const kinds = (updates as { update: { sessionUpdate: string } }[]).map((u) => u.update.sessionUpdate);
+    expect(kinds).toEqual(['user_message_chunk', 'agent_thought_chunk', 'agent_message_chunk']);
+    const texts = (updates as { update: { content?: { text?: string } } }[])
+      .map((u) => u.update.content?.text)
+      .filter(Boolean);
+    expect(texts).toEqual(['hello', 'pondering', 'hi there']);
+  });
+
+  it('still loads the session when history export fails', async () => {
+    const first = createAgent();
+    await first.initialize({ protocolVersion: 1, clientCapabilities: {} });
+    const session = await first.newSession({ cwd: '/tmp', mcpServers: [] });
+    await first.prompt({
+      sessionId: session.sessionId,
+      prompt: [{ type: 'text', text: 'hello' }],
+    });
+
+    const failingExport = async () => {
+      throw new Error('export unavailable');
+    };
+    const second = new AmpAcpAgent(mockClient, createAmpTransport('sdk'), failingExport);
+    await second.initialize({ protocolVersion: 1, clientCapabilities: {} });
+    const loaded = await second.loadSession({ sessionId: session.sessionId, cwd: '/tmp', mcpServers: [] });
+    expect(loaded.configOptions).toBeDefined();
   });
 
   it('keeps sessions loadable before the first prompt completes', async () => {

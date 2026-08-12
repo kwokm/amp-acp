@@ -32,6 +32,7 @@ import {
 import { convertAcpMcpServersToAmpConfig, type AmpMcpConfig } from './mcp-config.js';
 import { toAcpNotifications } from './to-acp.js';
 import { rememberSession, recallSession } from './session-store.js';
+import { exportThreadHistory, historyToNotifications, type ThreadHistoryExporter } from './thread-history.js';
 import path from 'node:path';
 import packageJson from '../package.json';
 
@@ -138,9 +139,16 @@ export class AmpAcpAgent implements Agent {
   sessions = new Map<string, SessionState>();
   private clientCapabilities?: ClientCapabilities;
 
-  constructor(client: AgentSideConnection, transport = createAmpTransport()) {
+  private exportThread: ThreadHistoryExporter;
+
+  constructor(
+    client: AgentSideConnection,
+    transport = createAmpTransport(),
+    exportThread: ThreadHistoryExporter = exportThreadHistory,
+  ) {
     this.client = client;
     this.transport = transport;
+    this.exportThread = exportThread;
   }
 
   async initialize(request: InitializeRequest): Promise<InitializeResponseWithAgentInfo> {
@@ -239,6 +247,19 @@ export class AmpAcpAgent implements Agent {
       };
       this.sessions.set(params.sessionId, session);
       console.error(`[acp] loaded session ${params.sessionId} -> thread ${persisted.threadId}`);
+    }
+
+    if (session.threadId) {
+      try {
+        const messages = await this.exportThread(session.threadId, session.cwd);
+        for (const notification of historyToNotifications(messages, params.sessionId)) {
+          await this.client.sessionUpdate(notification);
+        }
+      } catch (e) {
+        // History replay is best-effort: the thread still continues correctly
+        // without it, so a failed export must not fail the load.
+        console.error('[acp] failed to replay thread history', e);
+      }
     }
 
     return {

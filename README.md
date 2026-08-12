@@ -101,7 +101,7 @@ When the environment variable `AMP_ACP_CONTINUE_LATEST=1` is set, the first prom
 
 amp-acp advertises the ACP `loadSession` capability. Once a prompt has started an Amp thread, the ACP session ID is mapped to that thread in a small state file (`~/.local/state/amp-acp/sessions.json`; respects `XDG_STATE_HOME`, uses `%LOCALAPPDATA%\amp-acp` on Windows, and can be overridden with `AMP_ACP_STATE_DIR`). When a client calls `session/load`, amp-acp restores the session's permission mode and Amp mode and continues the same thread (equivalent to `amp threads continue <id>`), even across amp-acp process restarts.
 
-Amp keeps the conversation context server-side, so the resumed thread has full history. amp-acp does not currently replay prior messages as `session/update` notifications during `session/load`; clients that render history from their own storage (or start from the next prompt) work as expected.
+During `session/load`, prior messages are replayed to the client as `session/update` notifications (user/agent messages, thinking, and tool calls) using `amp threads export`, so the client can rebuild the transcript. Replay is best-effort: if the export fails, the session still loads and the thread still continues with full server-side context.
 
 ### Amp execution transport
 
